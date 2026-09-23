@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Nordic Scan Capture (web test)</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📐</text></svg>">
+<style>
+:root{
+  --signal:#ff6a13;      /* hi-vis survey orange */
+  --slate:#23303b;       /* instrument body */
+  --paper:#f7f8f6;       /* field-book white */
+  --rule:#c9d1d6;
+  --ok:#1f8a4c; --warn:#c77700; --bad:#c62828;
+  font-family: Roboto, "Segoe UI", system-ui, sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--paper);color:var(--slate)}
+body{padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+main{max-width:34rem;margin:0 auto;padding:1.25rem}
+h1{font-size:1.6rem;line-height:1.2;margin:.5rem 0 .25rem;font-weight:700}
+h1 span{display:block;font-size:1rem;font-weight:400;color:#56646f}
+p{line-height:1.5;margin:.5rem 0}
+button{font:inherit;font-weight:600;border:0;border-radius:.6rem;padding:.9rem 1.1rem;
+  background:var(--slate);color:#fff;min-height:3rem;cursor:pointer}
+button.go{background:var(--signal);color:#1a1a1a;font-size:1.15rem;width:100%}
+button.ghost{background:transparent;color:var(--slate);border:2px solid var(--slate)}
+button:disabled{opacity:.45}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--signal);outline-offset:2px}
+fieldset{border:1px solid var(--rule);border-radius:.6rem;margin:1rem 0;padding:.75rem 1rem}
+legend{font-weight:600;padding:0 .3rem}
+label{display:flex;justify-content:space-between;align-items:center;gap:1rem;margin:.5rem 0}
+input,select{font:inherit;padding:.45rem .5rem;border:1px solid var(--rule);border-radius:.4rem;width:7rem}
+input[type=checkbox]{width:1.4rem;height:1.4rem}
+.msg{padding:.75rem 1rem;border-radius:.6rem;background:#fff3e8;border-left:4px solid var(--signal)}
+.err{background:#fdecea;border-left-color:var(--bad)}
+table{border-collapse:collapse;width:100%;margin:.5rem 0}
+td{padding:.35rem .25rem;border-bottom:1px solid var(--rule);vertical-align:middle}
+.hidden{display:none!important}
+
+/* ---------- in-session overlay ---------- */
+#overlay{position:fixed;inset:0;pointer-events:none;color:var(--slate)}
+#overlay .panel{pointer-events:auto;background:rgba(247,248,246,.9);border-radius:.8rem;
+  box-shadow:0 1px 0 rgba(0,0,0,.08)}
+#status{position:absolute;top:calc(env(safe-area-inset-top) + .5rem);left:.5rem;right:.5rem;
+  padding:.5rem .75rem;display:flex;gap:.75rem;align-items:center;flex-wrap:wrap;font-size:.95rem}
+#dot{width:.9rem;height:.9rem;border-radius:50%;background:var(--bad);flex:none}
+#dot.ok{background:var(--ok)} #dot.warn{background:var(--warn)}
+#hint{font-weight:600}
+#counts{margin-left:auto;font-variant-numeric:tabular-nums}
+/* the prism target — the one thing on screen that must never be missed */
+#reticle{position:absolute;left:50%;top:50%;width:64px;height:64px;margin:-32px 0 0 -32px}
+#map{position:absolute;left:.5rem;bottom:calc(env(safe-area-inset-bottom) + 5.5rem);
+  width:34vw;max-width:11rem;aspect-ratio:1;padding:.3rem}
+#map canvas{width:100%;height:100%;display:block}
+#bar{position:absolute;left:.5rem;right:.5rem;bottom:calc(env(safe-area-inset-bottom) + .5rem);
+  display:flex;gap:.5rem;padding:.5rem}
+#bar button{flex:1;padding:.7rem .4rem;font-size:.95rem}
+#bar button.stop{background:var(--signal);color:#1a1a1a}
+#toast{position:absolute;left:50%;top:calc(50% + 48px);transform:translateX(-50%);
+  padding:.45rem .8rem;font-weight:600;white-space:nowrap}
+#verifyView{position:absolute;inset:0;background:rgba(35,48,59,.94);pointer-events:auto;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;padding:1rem;color:#fff}
+#verifyWrap{position:relative;max-width:100%;max-height:70vh}
+#verifyWrap img{max-width:100%;max-height:70vh;display:block}
+#verifyMark{position:absolute;width:28px;height:28px;margin:-14px 0 0 -14px;border:3px solid var(--signal);
+  border-radius:50%;box-shadow:0 0 0 2px #fff}
+#verifyView p{max-width:30rem;text-align:center}
+@media (prefers-reduced-motion:no-preference){ #toast{transition:opacity .25s} }
+</style>
+</head>
+<body>
+<main id="start">
+  <h1>Nordic Scan Capture<span>Web test build — records a capture bundle for the Nordic Scan importer</span></h1>
+  <div id="support" class="msg hidden"></div>
+  <p>Walk the area slowly with the phone at chest height, keep moving sideways as well as forward, and come back past your starting point before you finish.</p>
+  <fieldset>
+    <legend>Settings</legend>
+    <label>Longest image side (px)
+      <select id="optSize"><option>1280</option><option selected>1920</option><option value="0">Full</option></select></label>
+    <label>Save a frame every (cm)<input id="optMove" type="number" min="2" max="50" value="5"></label>
+    <label>…or every (degrees turned)<input id="optTurn" type="number" min="2" max="45" value="5"></label>
+    <label>Most frames per second<input id="optRate" type="number" min="1" max="10" value="4"></label>
+    <label>Record depth maps<input id="optDepth" type="checkbox" checked></label>
+    <label>Flip images upside down (only if Verify says so)<input id="optFlip" type="checkbox"></label>
+  </fieldset>
+  <button id="btnStart" class="go">Start scanning</button>
+  <p style="font-size:.9rem;color:#56646f">Needs Chrome on Android with Google Play Services for AR, opened over https (or localhost). Nothing leaves the phone: the bundle is built on the device and downloaded.</p>
+</main>
+
+<main id="done" class="hidden">
+  <h1>Scan finished<span id="doneSummary"></span></h1>
+  <div id="doneWarn" class="msg hidden"></div>
+  <section id="refSection" class="hidden">
+    <h2 style="font-size:1.15rem">Tape readings</h2>
+    <p>Enter the tape measurement for each pair of ends you marked. Leave blank to drop one.</p>
+    <table id="refTable"></table>
+  </section>
+  <p><button id="btnDownload" class="go">Download capture bundle</button></p>
+  <p><button id="btnAgain" class="ghost">Start a new scan</button></p>
+</main>
+
+<div id="overlay" class="hidden">
+  <div id="status" class="panel"><span id="dot"></span><span id="hint">Starting…</span><span id="counts">0 frames</span></div>
+  <svg id="reticle" viewBox="0 0 64 64" aria-hidden="true">
+    <circle cx="32" cy="32" r="22" fill="none" stroke="#fff" stroke-width="5"/>
+    <circle cx="32" cy="32" r="22" fill="none" stroke="#ff6a13" stroke-width="3"/>
+    <path d="M32 10v44M10 32h44" stroke="#fff" stroke-width="4"/>
+    <path d="M32 10v44M10 32h44" stroke="#23303b" stroke-width="1.5"/>
+    <circle cx="32" cy="32" r="3" fill="#ff6a13" stroke="#fff" stroke-width="1.5"/>
+  </svg>
+  <div id="map" class="panel"><canvas id="mapCanvas" width="300" height="300"></canvas></div>
+  <div id="toast" class="panel" style="opacity:0"></div>
+  <div id="bar" class="panel">
+    <button id="btnMark">Mark tape end A</button>
+    <button id="btnVerify">Verify: snap</button>
+    <button id="btnFinish" class="stop">Finish</button>
+  </div>
+  <div id="verifyView" class="hidden">
+    <div id="verifyWrap"><img id="verifyImg" alt="Saved check frame"><div id="verifyMark"></div></div>
+    <p id="verifyText"></p>
+    <button id="btnVerifyClose" class="go" style="max-width:20rem">Back to scanning</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const APP_VERSION = "web-0.1.0";
+
+/* ================================================================ maths
+   Same conventions as the Python importer: camera-to-world pose, GL camera
+   axes (+X right, +Y up, looking down -Z), quaternion x,y,z,w. */
+function qToR(q){ const [x,y,z,w]=q; return [
+  [1-2*(y*y+z*z), 2*(x*y-z*w),   2*(x*z+y*w)],
+  [2*(x*y+z*w),   1-2*(x*x+z*z), 2*(y*z-x*w)],
+  [2*(x*z-y*w),   2*(y*z+x*w),   1-2*(x*x+y*y)]]; }
+const mulv = (R,v) => [0,1,2].map(i => R[i][0]*v[0]+R[i][1]*v[1]+R[i][2]*v[2]);
+const dist = (a,b) => Math.hypot(a[0]-b[0],a[1]-b[1],a[2]-b[2]);
+const fwd = q => mulv(qToR(q),[0,0,-1]);
+const angDeg = (a,b) => Math.acos(Math.max(-1,Math.min(1,a[0]*b[0]+a[1]*b[1]+a[2]*b[2])))*180/Math.PI;
+function project(X, t, q, K){               // world point -> pixel, exactly as the importer does
+  const R=qToR(q), d=[X[0]-t[0],X[1]-t[1],X[2]-t[2]];
+  const p=[0,1,2].map(i => R[0][i]*d[0]+R[1][i]*d[1]+R[2][i]*d[2]);   // R^T d
+  const depth=-p[2];
+  return {u:K.cx+K.fx*p[0]/depth, v:K.cy-K.fy*p[1]/depth, depth};
+}
+/* WebXR projection matrix (column-major) -> pinhole intrinsics for a w x h image
+   whose origin is the top-left corner, x right, y down. */
+function intrinsics(P, w, h){
+  return {width:w, height:h, fx:P[0]*w/2, fy:P[5]*h/2, cx:w*(1-P[8])/2, cy:h*(1+P[9])/2};
+}
+
+/* ================================================================ files
+   A tiny zip writer (stored, no compression — JPEGs don't shrink anyway) and a
+   16-bit greyscale PNG writer for depth, using the browser's own deflate. */
+const CRC = (() => { const t=new Uint32Array(256); for(let n=0;n<256;n++){let c=n;
+  for(let k=0;k<8;k++) c = c&1 ? 0xEDB88320^(c>>>1) : c>>>1; t[n]=c>>>0;} return t; })();
+function crc32(bytes, c=0xFFFFFFFF){ for(let i=0;i<bytes.length;i++) c=CRC[(c^bytes[i])&255]^(c>>>8); return c; }
+async function makeZip(entries){           // entries: [{name, blob}]
+  const parts=[], central=[]; let offset=0; const enc=new TextEncoder();
+  for(const e of entries){
+    const data=new Uint8Array(await e.blob.arrayBuffer()), name=enc.encode(e.name);
+    const crc=(crc32(data)^0xFFFFFFFF)>>>0;
+    const h=new DataView(new ArrayBuffer(30));
+    h.setUint32(0,0x04034b50,true); h.setUint16(4,20,true); h.setUint16(6,0x0800,true);
+    h.setUint16(8,0,true); h.setUint16(10,0,true); h.setUint16(12,0x21,true);
+    h.setUint32(14,crc,true); h.setUint32(18,data.length,true); h.setUint32(22,data.length,true);
+    h.setUint16(26,name.length,true); h.setUint16(28,0,true);
+    parts.push(h.buffer,name,data);
+    const c=new DataView(new ArrayBuffer(46));
+    c.setUint32(0,0x02014b50,true); c.setUint16(4,20,true); c.setUint16(6,20,true);
+    c.setUint16(8,0x0800,true); c.setUint16(10,0,true); c.setUint16(12,0,true); c.setUint16(14,0x21,true);
+    c.setUint32(16,crc,true); c.setUint32(20,data.length,true); c.setUint32(24,data.length,true);
+    c.setUint16(28,name.length,true); c.setUint32(42,offset,true);
+    central.push(c.buffer,name);
+    offset += 30+name.length+data.length;
+  }
+  const cdSize=central.reduce((s,p)=>s+(p.byteLength??p.length),0);
+  const end=new DataView(new ArrayBuffer(22));
+  end.setUint32(0,0x06054b50,true); end.setUint16(8,entries.length,true);
+  end.setUint16(10,entries.length,true); end.setUint32(12,cdSize,true); end.setUint32(16,offset,true);
+  return new Blob([...parts,...central,end.buffer],{type:"application/zip"});
+}
+async function png16(w, h, mm){             // mm: Uint16Array, row-major
+  const raw=new Uint8Array(h*(1+2*w));
+  for(let y=0;y<h;y++){ let o=y*(1+2*w); raw[o++]=0;
+    for(let x=0;x<w;x++){ const v=mm[y*w+x]; raw[o++]=v>>8; raw[o++]=v&255; } }
+  const z=new Uint8Array(await new Response(new Blob([raw]).stream()
+            .pipeThrough(new CompressionStream("deflate"))).arrayBuffer());
+  const chunk=(type,data)=>{ const b=new Uint8Array(12+data.length), dv=new DataView(b.buffer);
+    dv.setUint32(0,data.length); b.set(new TextEncoder().encode(type),4); b.set(data,8);
+    dv.setUint32(8+data.length,(crc32(b.subarray(4,8+data.length))^0xFFFFFFFF)>>>0); return b; };
+  const ihdr=new Uint8Array(13), dv=new DataView(ihdr.buffer);
+  dv.setUint32(0,w); dv.setUint32(4,h); ihdr[8]=16; ihdr[9]=0; ihdr[10]=0; ihdr[11]=0; ihdr[12]=0;
+  return new Blob([new Uint8Array([137,80,78,71,13,10,26,10]),chunk("IHDR",ihdr),
+                   chunk("IDAT",z),chunk("IEND",new Uint8Array(0))],{type:"image/png"});
+}
+
+/* ================================================================ state */
+let S = null;
+function freshState(){
+  return { frames:[], files:[], cameras:{}, refs:[], pendingA:null, levels:[],
+    lastKey:null, lastKeyTime:0, busy:0, skippedBusy:0, lost:0, limited:0,
+    path:[], verify:null, wantSnap:false, wantHit:null, t0:null, depthFormat:null,
+    settings:{ size:+$("optSize").value, move:+$("optMove").value/100,
+      turn:+$("optTurn").value, rate:+$("optRate").value,
+      depth:$("optDepth").checked, flip:$("optFlip").checked } };
+}
+
+/* ================================================================ support check */
+(async () => {
+  const box=$("support");
+  const fail = m => { box.textContent=m; box.classList.remove("hidden"); box.classList.add("err");
+                      $("btnStart").disabled=true; };
+  if(!window.isSecureContext) return fail("This page must be opened over https (or http://localhost). Chrome blocks camera tracking on plain http.");
+  if(!navigator.xr) return fail("This browser has no WebXR. Open the page in Chrome on the Android phone.");
+  try{ if(!(await navigator.xr.isSessionSupported("immersive-ar")))
+        return fail("Chrome reports AR is not available. Check that Google Play Services for AR is installed and up to date.");
+  }catch(e){ return fail("Could not check AR support: "+e.message); }
+})();
+
+/* ================================================================ session */
+let session, gl, glBinding, refSpace, viewerSpace, hitSource, prog, fbo, fboTex, quad;
+
+async function start(){
+  S = freshState();
+  const canvas=document.createElement("canvas");
+  gl = canvas.getContext("webgl2",{xrCompatible:true, alpha:true}) ||
+       canvas.getContext("webgl",{xrCompatible:true, alpha:true});
+  const opts = { requiredFeatures:["camera-access","local"],
+                 optionalFeatures:["hit-test","dom-overlay"], domOverlay:{root:$("overlay")} };
+  if(S.settings.depth){
+    opts.optionalFeatures.push("depth-sensing");
+    opts.depthSensing={usagePreference:["cpu-optimized"], dataFormatPreference:["luminance-alpha","float32"]};
+  }
+  try{ session = await navigator.xr.requestSession("immersive-ar", opts); }
+  catch(e){ const b=$("support"); b.textContent="Could not start AR: "+e.message+
+            " — Chrome must allow camera access for this site.";
+            b.classList.remove("hidden"); b.classList.add("err"); return; }
+  S.depthFormat = null;
+  if(S.settings.depth){ try{ const f=session.depthDataFormat;
+    if(f==="luminance-alpha"||f==="float32") S.depthFormat=f; }catch(e){} }
+  $("start").classList.add("hidden"); $("overlay").classList.remove("hidden");
+  session.updateRenderState({baseLayer:new XRWebGLLayer(session, gl)});
+  glBinding = new XRWebGLBinding(session, gl);
+  refSpace = await session.requestReferenceSpace("local");
+  try{ viewerSpace = await session.requestReferenceSpace("viewer");
+       hitSource = await session.requestHitTestSource({space:viewerSpace}); }
+  catch(e){ hitSource=null; }
+  if(!hitSource){ $("btnMark").disabled=true; $("btnVerify").disabled=true; }
+  setupGL();
+  session.addEventListener("end", onEnd);
+  session.requestAnimationFrame(onFrame);
+}
+
+function setupGL(){
+  const vs=`attribute vec2 p; varying vec2 uv; uniform float flip;
+    void main(){ uv=p*0.5+0.5; if(flip>0.5) uv.y=1.0-uv.y; gl_Position=vec4(p,0.0,1.0); }`;
+  const fs=`precision mediump float; varying vec2 uv; uniform sampler2D t;
+    void main(){ gl_FragColor=texture2D(t,uv); }`;
+  const sh=(type,src)=>{ const s=gl.createShader(type); gl.shaderSource(s,src); gl.compileShader(s);
+    if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+  prog=gl.createProgram(); gl.attachShader(prog,sh(gl.VERTEX_SHADER,vs));
+  gl.attachShader(prog,sh(gl.FRAGMENT_SHADER,fs)); gl.linkProgram(prog);
+  quad=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,quad);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
+  fbo=gl.createFramebuffer(); fboTex=gl.createTexture();
+}
+
+/* Copy the camera image into our own texture at the size we want, then read it back. */
+function grabCamera(camTex, w, h){
+  gl.bindTexture(gl.TEXTURE_2D,fboTex);
+  if(fboTex._w!==w||fboTex._h!==h){
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,w,h,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+    fboTex._w=w; fboTex._h=h;
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER,fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,fboTex,0);
+  gl.viewport(0,0,w,h); gl.useProgram(prog);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,camTex);
+  gl.uniform1i(gl.getUniformLocation(prog,"t"),0);
+  gl.uniform1f(gl.getUniformLocation(prog,"flip"),S.settings.flip?1:0);
+  gl.bindBuffer(gl.ARRAY_BUFFER,quad);
+  const loc=gl.getAttribLocation(prog,"p"); gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+  const px=new Uint8Array(w*h*4); gl.readPixels(0,0,w,h,gl.RGBA,gl.UNSIGNED_BYTE,px);
+  return px;          // bottom row first (GL convention); flipped to top-first when encoded
+}
+
+const encCanvas=document.createElement("canvas");
+async function toJpeg(px,w,h){
+  encCanvas.width=w; encCanvas.height=h;
+  const img=new ImageData(w,h), row=w*4;
+  for(let y=0;y<h;y++) img.data.set(px.subarray((h-1-y)*row,(h-y)*row), y*row);
+  encCanvas.getContext("2d").putImageData(img,0,0);
+  return await new Promise(r=>encCanvas.toBlob(r,"image/jpeg",0.92));
+}
+
+function cameraKey(K){
+  for(const [k,c] of Object.entries(S.cameras))
+    if(c.width===K.width&&c.height===K.height&&["fx","fy","cx","cy"].every(p=>Math.abs(c[p]-K[p])<1)) return k;
+  const k = Object.keys(S.cameras).length ? `c${Object.keys(S.cameras).length+1}` : "main";
+  S.cameras[k]=K; return k;
+}
+
+function depthMM(info){
+  const w=info.width,h=info.height,n=w*h, out=new Uint16Array(n);
+  const src = S.depthFormat==="float32" ? new Float32Array(info.data) : new Uint16Array(info.data);
+  for(let i=0;i<n;i++){ const m=src[i]*info.rawValueToMeters*1000; out[i]= m>0&&m<65535 ? Math.round(m) : 0; }
+  return {w,h,out};
+}
+
+function onFrame(time, frame){
+  const s=frame.session; s.requestAnimationFrame(onFrame);
+  const layer=s.renderState.baseLayer;
+  gl.bindFramebuffer(gl.FRAMEBUFFER,layer.framebuffer);
+  gl.viewport(0,0,layer.framebufferWidth,layer.framebufferHeight);
+  gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT);
+  if(S.t0===null) S.t0=time;
+
+  const pose=frame.getViewerPose(refSpace);
+  if(!pose){ S.lost++; status("bad","Tracking lost — move slowly over a textured area"); return; }
+  const view=pose.views[0], tr=view.transform;
+  const t=[tr.position.x,tr.position.y,tr.position.z];
+  const q=[tr.orientation.x,tr.orientation.y,tr.orientation.z,tr.orientation.w];
+  S.path.push([t[0],t[2]]); if(S.path.length>4000) S.path.splice(0,2);
+
+  // hit test at the reticle (screen centre)
+  let hit=null;
+  if(hitSource){ const r=frame.getHitTestResults(hitSource);
+    if(r.length){ const hp=r[0].getPose(refSpace); if(hp){ const p=hp.transform.position, o=hp.transform.orientation;
+      hit={p:[p.x,p.y,p.z], normal:mulv(qToR([o.x,o.y,o.z,o.w]),[0,1,0])}; } } }
+  if(S.wantHit){ const cb=S.wantHit; S.wantHit=null; cb(hit); }
+
+  // speed
+  let fast=false;
+  if(S.prev){ const dt=(time-S.prev.time)/1000;
+    if(dt>0){ fast = dist(t,S.prev.t)/dt>1.0 || angDeg(fwd(q),fwd(S.prev.q))/dt>60; } }
+  S.prev={t,q,time};
+
+  if(pose.emulatedPosition){ S.limited++; status("warn","Tracking limited — keep moving, aim at detail"); }
+  else if(fast) status("warn","Slow down");
+  else status("ok", S.pendingA ? "Aim at tape end B and tap Mark" : "Scanning");
+
+  const cam=view.camera; if(!cam) return;
+  const snap=S.wantSnap;
+  const moved = !S.lastKey || dist(t,S.lastKey.t)>=S.settings.move || angDeg(fwd(q),fwd(S.lastKey.q))>=S.settings.turn;
+  const due = time-S.lastKeyTime >= 1000/S.settings.rate;
+  if(!snap && !(moved && due && !fast && !pose.emulatedPosition)) return;
+  if(S.busy>=3){ S.skippedBusy++; return; }
+
+  const scale = S.settings.size ? Math.min(1, S.settings.size/Math.max(cam.width,cam.height)) : 1;
+  const w=Math.round(cam.width*scale), h=Math.round(cam.height*scale);
+  const K=intrinsics(view.projectionMatrix, w, h);
+  const camTex=glBinding.getCameraImage(cam);
+  const px=grabCamera(camTex,w,h);
+  gl.bindFramebuffer(gl.FRAMEBUFFER,layer.framebuffer);
+
+  if(snap){ S.wantSnap=false; S.busy++;
+    toJpeg(px,w,h).then(b=>{ S.busy--; S.verify={blob:b,t,q,K}; toast("Check frame saved — step sideways, aim at something distinct, tap Verify: check");
+      $("btnVerify").textContent="Verify: check"; }); return; }
+
+  let depth=null;
+  if(S.depthFormat){ try{ const di=frame.getDepthInformation(view); if(di) depth=depthMM(di); }catch(e){} }
+  S.lastKey={t,q}; S.lastKeyTime=time;
+  const n=S.frames.length+1, id="f"+String(n).padStart(6,"0"), camKey=cameraKey(K);
+  const rec={id,kind:"frame",file:`frames/${id}.jpg`,camera:camKey,
+             t_ns:Math.round((time-S.t0)*1e6),tracking:"TRACKING",t,q};
+  S.frames.push(rec); S.busy++;
+  const jobs=[toJpeg(px,w,h).then(b=>S.files.push({name:rec.file,blob:b}))];
+  if(depth){ rec.depth=`depth/${id}.png`;
+    jobs.push(png16(depth.w,depth.h,depth.out).then(b=>S.files.push({name:rec.depth,blob:b}))); }
+  Promise.all(jobs).then(()=>{S.busy--;}, ()=>{S.busy--;});
+  $("counts").textContent=`${S.frames.length} frames · ${S.refs.length} tape runs`;
+  if(S.frames.length%3===0) drawMap(t,q);
+}
+
+function status(kind,text){ $("dot").className=kind; if($("hint").textContent!==text) $("hint").textContent=text; }
+let toastTimer;
+function toast(m){ const el=$("toast"); el.textContent=m; el.style.opacity=1;
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.style.opacity=0,3500); }
+
+function drawMap(t,q){
+  const c=$("mapCanvas"), g=c.getContext("2d"); g.clearRect(0,0,c.width,c.height);
+  const pts=S.path; if(pts.length<2) return;
+  let x0=Infinity,x1=-Infinity,z0=Infinity,z1=-Infinity;
+  for(const [x,z] of pts){ x0=Math.min(x0,x); x1=Math.max(x1,x); z0=Math.min(z0,z); z1=Math.max(z1,z); }
+  const span=Math.max(x1-x0,z1-z0,2), s=(c.width-30)/span, cx=(x0+x1)/2, cz=(z0+z1)/2;
+  const P=(x,z)=>[c.width/2+(x-cx)*s, c.height/2+(z-cz)*s];
+  g.strokeStyle="#23303b"; g.lineWidth=3; g.beginPath();
+  pts.forEach(([x,z],i)=>{ const [u,v]=P(x,z); i?g.lineTo(u,v):g.moveTo(u,v); }); g.stroke();
+  g.fillStyle="#ff6a13"; for(const f of S.frames){ const [u,v]=P(f.t[0],f.t[2]); g.fillRect(u-2,v-2,4,4); }
+  const f=fwd(q), [u,v]=P(t[0],t[2]);
+  g.strokeStyle="#ff6a13"; g.lineWidth=5; g.beginPath(); g.moveTo(u,v); g.lineTo(u+f[0]*30,v+f[2]*30); g.stroke();
+  g.fillStyle="#23303b"; g.font="22px sans-serif"; g.fillText(`${span.toFixed(1)} m`,8,c.height-8);
+}
+
+/* ================================================================ buttons */
+$("btnMark").addEventListener("click",()=>{
+  S.wantHit = hit => {
+    if(!hit){ toast("No surface under the target — aim at a floor, wall or edge"); return; }
+    const lvl = angDeg(hit.normal,[0,1,0]);
+    if(!S.pendingA){ S.pendingA=hit; $("btnMark").textContent="Mark tape end B";
+      toast(`End A marked${lvl<10?` (floor, ${lvl.toFixed(1)}° off level)`:""}`); }
+    else{ const a=S.pendingA.p, b=hit.p;
+      S.refs.push({id:`R${S.refs.length+1}`, a, b, phone_m:dist(a,b)});
+      for(const h of [S.pendingA,hit]) if(angDeg(h.normal,[0,1,0])<10) S.levels.push(angDeg(h.normal,[0,1,0]));
+      S.pendingA=null; $("btnMark").textContent="Mark tape end A";
+      toast(`Tape run ${S.refs.length}: phone reads ${dist(a,b).toFixed(3)} m`); }
+  };
+});
+$("btnVerify").addEventListener("click",()=>{
+  if(!S.verify){ S.wantSnap=true; return; }
+  S.wantHit = hit => {
+    if(!hit){ toast("No surface under the target"); return; }
+    const {t,q,K,blob}=S.verify, r=project(hit.p,t,q,K);
+    const inside = r.depth>0 && r.u>=0 && r.v>=0 && r.u<K.width && r.v<K.height;
+    $("verifyImg").src=URL.createObjectURL(blob);
+    $("verifyMark").style.left=(100*r.u/K.width)+"%"; $("verifyMark").style.top=(100*r.v/K.height)+"%";
+    $("verifyMark").classList.toggle("hidden",!inside);
+    $("verifyText").textContent = inside
+      ? "The ring should sit on the thing the target was pointing at. On it: images, lens numbers and positions agree. Upside-down mirror position: turn on 'Flip images' in settings. Somewhere else entirely: send me this screenshot."
+      : "That point is not in view of the check frame. Aim at something the check frame could see, then try again.";
+    $("verifyView").classList.remove("hidden");
+  };
+});
+$("btnVerifyClose").addEventListener("click",()=>{ $("verifyView").classList.add("hidden");
+  S.verify=null; $("btnVerify").textContent="Verify: snap"; });
+$("btnFinish").addEventListener("click",()=>session&&session.end());
+$("btnStart").addEventListener("click",start);
+$("btnAgain").addEventListener("click",()=>{ $("done").classList.add("hidden"); $("start").classList.remove("hidden"); });
+
+async function onEnd(){
+  $("overlay").classList.add("hidden");
+  while(S.busy>0) await new Promise(r=>setTimeout(r,100));
+  $("done").classList.remove("hidden");
+  const secs=S.frames.length? (S.frames.at(-1).t_ns/1e9).toFixed(0):0;
+  $("doneSummary").textContent=`${S.frames.length} frames over ${secs} s${S.depthFormat?", with depth":""}`;
+  const w=[];
+  if(S.frames.length<20) w.push("Very few frames were saved. Walk further and slower next time.");
+  if(S.skippedBusy>10) w.push(`${S.skippedBusy} frames were skipped because the phone was busy saving. Lower the image size.`);
+  if(S.lost>60) w.push("Tracking was lost for a while. The importer will detect any jump in position.");
+  if(S.levels.length) w.push(`Floor level check: floor surfaces read ${Math.max(...S.levels).toFixed(1)}° off level at worst (should be under ~2°).`);
+  if(w.length){ $("doneWarn").innerHTML=""; w.forEach(x=>{const p=document.createElement("p");p.textContent=x;$("doneWarn").appendChild(p);});
+                $("doneWarn").classList.remove("hidden"); }
+  const tb=$("refTable"); tb.innerHTML="";
+  S.refs.forEach((r,i)=>{ const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${r.id}</td><td>phone ${r.phone_m.toFixed(3)} m</td>
+      <td><input type="number" step="0.001" min="0" placeholder="tape m" aria-label="Tape reading for ${r.id} in metres" data-i="${i}"></td>
+      <td><input type="text" placeholder="label" aria-label="Label for ${r.id}" data-l="${i}" style="width:8rem"></td>`;
+    tb.appendChild(tr); });
+  $("refSection").classList.toggle("hidden",!S.refs.length);
+}
+
+$("btnDownload").addEventListener("click", async ()=>{
+  const b=$("btnDownload"); b.disabled=true; b.textContent="Building bundle…";
+  try{
+    const refs=[];
+    document.querySelectorAll("#refTable input[data-i]").forEach(inp=>{
+      const v=parseFloat(inp.value), i=+inp.dataset.i;
+      if(v>0){ const r=S.refs[i]; refs.push({id:r.id,
+        label:document.querySelector(`#refTable input[data-l="${i}"]`).value||"",
+        a:r.a,b:r.b,tape_m:v}); } });
+    const manifest={format:"nordic-capture",version:1,app_version:APP_VERSION,
+      device:{userAgent:navigator.userAgent},created_utc:new Date().toISOString(),
+      world:"webxr-local",camera_pose:"webxr-view-gl",units:"m",cameras:S.cameras,
+      depth:S.depthFormat?{format:"uint16-mm-png",source:`webxr-${S.depthFormat}`}:null,
+      checks:{floor_level_deg:S.levels, tracking_lost_frames:S.lost,
+              tracking_limited_frames:S.limited, skipped_busy:S.skippedBusy},
+      settings:S.settings};
+    const enc=s=>new Blob([s],{type:"text/plain"});
+    const files=[{name:"manifest.json",blob:enc(JSON.stringify(manifest,null,1))},
+                 {name:"poses.jsonl",blob:enc(S.frames.map(f=>JSON.stringify(f)).join("\n")+"\n")}];
+    if(refs.length) files.push({name:"references.json",blob:enc(JSON.stringify({references:refs},null,1))});
+    const zip=await makeZip(files.concat(S.files));
+    const stamp=new Date().toISOString().slice(0,16).replace(/[-:T]/g,"");
+    const a=document.createElement("a"); a.href=URL.createObjectURL(zip);
+    a.download=`capture_${stamp}.zip`; document.body.appendChild(a); a.click(); a.remove();
+    b.textContent=`Downloaded (${(zip.size/1e6).toFixed(0)} MB)`;
+  }catch(e){ b.textContent="Download failed: "+e.message; }
+  b.disabled=false;
+});
+</script>
+</body>
+</html>
